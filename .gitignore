@@ -1,0 +1,7 @@
+# 内部 QA / 提 bug 产物，不进教程仓库
+MatrixOne问题汇总.md
+MatrixOne_4.0复测对比.md
+created_issues.md
+file_issues.sh
+retest_40.sql
+.DS_Store
