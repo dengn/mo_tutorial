@@ -75,6 +75,7 @@ bash run_all.sh 04       # 只跑某一个能力
   - `DATA BRANCH MERGE 分支 INTO 主表 WHEN CONFLICT ACCEPT|SKIP|FAIL` 合并；
   - 分支血缘见 `mo_catalog.mo_branch_metadata`。
 > ⚠️ `DATA BRANCH DIFF` 全列输出当前不支持 DECIMAL/向量列（报 `unsupported mysql type 0`），故分支演示用 INT「分」存价；含 DECIMAL 的表可用 `OUTPUT SUMMARY` 或 `COLUMNS(...)` 规避。
+> ⚠️ v3.0.11：`DATA BRANCH CREATE` 若语句前带注释会报 `cannot find src and dst table`。MatrixOne Cloud **Web 控制台**会自动给每条语句加 `/* cloud_user */` 前缀，导致这一句在控制台里失败 —— **请用 mysql 命令行运行 `03_git4data.sql`**（DIFF/MERGE 不受影响）。
 
 ### 4. 向量 + 全文（`04_vector_fulltext.sql`）
 - 向量：`HNSW` 索引 + `l2_distance` / `cosine_distance` 相似度 Top-K。

@@ -54,6 +54,10 @@ INSERT INTO price_book SELECT product_id, name, CAST(price*100 AS SIGNED), 'on_s
 SELECT COUNT(*) AS `主表商品数` FROM price_book;
 
 SELECT '===== B2. 拉一个「促销提案」分支（DATA BRANCH CREATE，与主表完全独立）=====' AS step;
+-- ⚠️ v3.0.11 已知问题：DATA BRANCH CREATE 若语句前有注释会报
+--    "cannot find src and dst table"。MatrixOne Cloud Web 控制台会自动给每条语句
+--    注入 /* cloud_user */ 前缀，因此这一句在控制台里会失败 —— 请改用 mysql 命令行执行
+--    （DATA BRANCH DIFF / MERGE 不受影响）。
 DATA BRANCH CREATE TABLE price_book_promo FROM price_book;
 
 -- 在分支上做改动：手表/无人机打 8 折、上新「促销福袋」、下架「智能体脂秤」
