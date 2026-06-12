@@ -51,8 +51,10 @@ SELECT balance AS `王芳_回滚后余额` FROM accounts WHERE acct_id = 3;
 
 SELECT '===== 3. 约束保护 + 失败回滚：余额不足，整笔交易不留痕 =====' AS step;
 
-SELECT user_name, balance FROM accounts WHERE acct_id = 4;   -- 刘强仅 300 元
-SELECT stock FROM inventory WHERE product_id = 103;          -- 无人机库存 45
+-- 刘强仅 300 元
+SELECT user_name, balance FROM accounts WHERE acct_id = 4;
+-- 无人机库存 45
+SELECT stock FROM inventory WHERE product_id = 103;
 
 BEGIN;
   UPDATE inventory SET stock = stock - 1 WHERE product_id = 103;   -- 先扣了库存
