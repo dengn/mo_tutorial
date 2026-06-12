@@ -55,9 +55,14 @@ SELECT COUNT(*) AS `主表商品数` FROM price_book;
 
 SELECT '===== B2. 拉一个「促销提案」分支（DATA BRANCH CREATE，与主表完全独立）=====' AS step;
 -- ⚠️ v3.0.11 已知问题：DATA BRANCH CREATE 若语句前有注释会报
---    "cannot find src and dst table"。MatrixOne Cloud Web 控制台会自动给每条语句
---    注入 /* cloud_user */ 前缀，因此这一句在控制台里会失败 —— 请改用 mysql 命令行执行
---    （DATA BRANCH DIFF / MERGE 不受影响）。
+--    "cannot find src and dst table"。MatrixOne Cloud Web 控制台会给语句注入
+--    /* cloud_user */ 前缀，因此这一句在控制台单独执行会失败。处理办法（按优先级）：
+--      1) 用 mysql 命令行执行本脚本（最稳，DIFF/MERGE 也都正常）；
+--      2) 控制台里前面垫一条语句，让注释贴到它身上，例如：
+--           SELECT 1; DATA BRANCH CREATE TABLE price_book_promo FROM price_book;
+--      3) 实在只能在控制台：用 CREATE TABLE ... CLONE 代替（对注释不敏感），但注意
+--         CLONE 无分支血缘——DIFF 走全量对比、且 MERGE 不会传播 DELETE，仅 INSERT/UPDATE：
+--           CREATE TABLE price_book_promo CLONE price_book;
 DATA BRANCH CREATE TABLE price_book_promo FROM price_book;
 
 -- 在分支上做改动：手表/无人机打 8 折、上新「促销福袋」、下架「智能体脂秤」
