@@ -24,7 +24,8 @@ mo_demo/
     ├── 07_scheduled_task.sql # 能力七：任务调度（原生 SQL Task）
     ├── 99_cleanup.sql      # 清理全部演示对象
     ├── tpch_sf10_queries.sql # 附：TPC-H 22 条查询（库 mo_sample_data_tpch_sf10）
-    └── git4data_workbook.sql # 独立可跑的 Git-for-Data 完整示例（快照/时间旅行/Diff/克隆/回滚/PITR/数据分支）
+    ├── git4data_workbook.sql # 独立可跑的 Git-for-Data 完整示例
+    └── mo_workbook.sql       # ⭐ 七大能力合一的单文件 Workbook（OmniFabric v4.0 / MatrixOne v3.0.11 通用）
 ```
 
 ## 快速开始
