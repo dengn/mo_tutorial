@@ -9,6 +9,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import shlex
 import time
 
 FEATURES = ('git4data', 'vector', 'fulltext', 'ingest', 'htap', 'recovery', 'pubsub', 'iceberg', 'cdc')
@@ -96,28 +97,62 @@ class Case:
         self.progress = self.mo.RUNTIME / 'case.json'
         self.mapping = {name: 'case_' + feature + '_' + name.removeprefix('demo_') for name in NAMES}
         self.trace = []
+        self.running_step = None
         command = self.mo.command
+        lake_http = self.mo.lake_http
+
+        def redact(value):
+            value = re.sub(r'(mysql://[^:]+:)[^@]+@', r'\1<password>@', str(value))
+            return re.sub(r'(?i)(PASSWORD=)[^\s]+', r'\1<password>', value)
+        self.redact = redact
+
+        def traced(source, statement, user, operation):
+            started = time.monotonic()
+            entry = {'sql': redact(statement), 'source': source, 'user': user,
+                     'started_at': time.time(), 'status': 'running'}
+            self.trace.append(entry)
+            try:
+                result = operation()
+                if source == 'rest':
+                    if isinstance(result, bytes):
+                        response = f'对象存储返回 {len(result)} 字节'
+                    else:
+                        safe = {key: value for key, value in result.items()
+                                if key in ('namespace', 'name', 'hash', 'metadata-location', 'location', 'current-snapshot-id')}
+                        response = json.dumps(safe, ensure_ascii=False) if safe else 'REST 请求成功；返回字段：' + ', '.join(result.keys())
+                else:
+                    response = result or '执行成功（无结果集）'
+                    if source == 'shell' and len(response) > 4000:
+                        response = response[-4000:] + '\n（仅展示命令输出末尾 4000 字符）'
+                entry.update(ok=True, status='success', result=redact(response))
+                return result
+            except Exception as exc:
+                entry.update(ok=False, status='error', result=redact(exc))
+                raise
+            finally:
+                entry['duration_ms'] = round((time.monotonic() - started) * 1000)
 
         def scoped_command(args, **kwargs):
             if args[0] != 'mysql':
-                return command(args, **kwargs)
+                return traced('shell', shlex.join(args), '', lambda: command(args, **kwargs))
             actual = [self.names(arg) for arg in args]
             sql = actual[actual.index('-e') + 1]
-            before = time.monotonic()
-            entry = {'sql': re.sub(r'(mysql://[^:]+:)[^@]+@', r'\1<password>@', sql), 'source': 'mysql' if '13307' in actual else 'matrixone', 'user': actual[actual.index('-u')+1]}
-            try:
+            def execute():
                 result = command(actual, **kwargs)
                 if sql.strip().upper().rstrip(';') in ('SHOW CDC ALL', 'SHOW PITR', 'SHOW STAGES', 'SHOW DATABASES'):
                     result = '\n'.join(line for line in result.splitlines() if any(name in line.split('\t') for name in self.mapping.values()))
-                entry.update(ok=True, result=result or '执行成功（无结果集）')
                 return self.names(result, reverse=True)
-            except Exception as exc:
-                entry.update(ok=False, result=str(exc))
-                raise
-            finally:
-                entry['duration_ms'] = round((time.monotonic() - before) * 1000)
-                self.trace.append(entry)
+            source = 'mysql' if '13307' in actual else 'matrixone'
+            return traced(source, sql, actual[actual.index('-u')+1], execute)
         self.mo.command = scoped_command
+
+        def scoped_lake_http(path, body=None, **kwargs):
+            method = 'POST' if body is not None else 'GET'
+            statement = method + ' ' + ('http://127.0.0.1:9000' if kwargs.get('storage') else 'http://127.0.0.1:19120') + path
+            if body is not None:
+                statement += '\n' + json.dumps(body, ensure_ascii=False)
+            return traced('rest', statement, '', lambda: lake_http(path, body, **kwargs))
+        self.mo.lake_http = scoped_lake_http
 
     def names(self, value, reverse=False):
         mapping = {v:k for k,v in self.mapping.items()} if reverse else self.mapping
@@ -140,6 +175,7 @@ class Case:
     def view(self):
         state = self.mo.load_state()
         state['case'] = {**self.read(), 'feature': self.feature, 'namespace': 'case_' + self.feature + '_',
+                         'running_step': self.running_step, 'live_trace': [dict(t) for t in self.trace] if self.running_step else [],
                          'steps': [dict(id=s, title=STEPS[s][0], why=STEPS[s][1], sql=self.preview(s)) for s in PLANS[self.feature]]}
         return self.public(state)
 
@@ -187,41 +223,86 @@ class Case:
 
     def verify(self):
         m = self.mo
+        self.validation_checks = []
         if self.feature == 'iceberg': m.step_iceberg()
         if self.feature == 'recovery':
             data = m.pitr_lab('inspect')
-            if data['phase'] != 'good': raise m.DemoError('恢复内容与正常时间点不一致')
-        results = [m.run_check(check) for check in CHECKS[self.feature]]
-        if any(not result['rows'] for result in results): raise m.DemoError('验收查询未返回预期结果')
+            self.validation_checks.append({'check':'recovery_phase', 'title':'恢复时间点',
+                'purpose':'当前数据库必须处于事故前的正常状态', 'sql':'-- PITR 恢复状态',
+                'columns':['实际状态'], 'rows':[[data['phase']]], 'passed':data['phase']=='good'})
+        results = []
+        for check in CHECKS[self.feature]:
+            try:
+                result = m.run_check(check)
+            except m.DemoError as exc:
+                try: sql = m.run_check(check, preview=True)['sql']
+                except m.DemoError: sql = ''
+                result = {'check':check, 'sql':sql, 'columns':[], 'rows':[], 'error':str(exc)}
+            result['title'], result['purpose'] = PURPOSES[check]
+            result['passed'] = bool(result['rows']) and not result.get('error')
+            results.append(result)
+            self.validation_checks.append(result)
+        by_check = {result['check']: result for result in results}
+        def mark(check, passed):
+            by_check[check]['passed'] = bool(passed) and by_check[check]['passed']
+        def rows(check): return by_check[check]['rows']
         if self.feature == 'git4data':
-            self.require(results[0]['rows'] == [['1000000']] and results[1]['rows'] == [['1000000']], 'Clone 行数不一致')
-            self.require(dict(results[2]['rows']) == {'source':'299.00','candidate':'269.10'}, 'CI 隔离未通过')
+            mark('source_count', rows('source_count') == [['1000000']])
+            mark('clone_count', rows('clone_count') == [['1000000']])
+            mark('ci_prices', len(rows('ci_prices')) == 2 and dict(rows('ci_prices')) == {'source':'299.00','candidate':'269.10'})
         if self.feature == 'htap':
-            self.require(results[0]['rows'][0][0] == '1001', '订单数不正确')
-            self.require(m.scalar('SELECT stock FROM demo_shop.products WHERE product_id=1') == '23', '库存扣减不正确')
+            mark('live_report', bool(rows('live_report')) and rows('live_report')[0][0] == '1001')
+            try:
+                stock = m.scalar('SELECT stock FROM demo_shop.products WHERE product_id=1')
+                self.validation_checks.append({'check':'stock', 'title':'库存扣减', 'purpose':'商品 1 库存从 24 降为 23',
+                    'sql':'SELECT stock FROM demo_shop.products WHERE product_id=1;', 'columns':['stock'],
+                    'rows':[[stock]], 'passed':stock=='23'})
+            except m.DemoError as exc:
+                self.validation_checks.append({'check':'stock', 'title':'库存扣减', 'purpose':'商品 1 库存从 24 降为 23',
+                    'sql':'SELECT stock FROM demo_shop.products WHERE product_id=1;', 'columns':[], 'rows':[],
+                    'error':str(exc), 'passed':False})
         if self.feature == 'vector':
-            health = m.vector_health('check')
-            self.require(health['vectors'] == 1200 and health['centroids'] == 32, 'IVF 重建结果不正确')
-        if self.feature == 'cdc': self.require(all(r['rows'] == [['1']] for r in results), 'CDC 两端不一致')
-        if self.feature == 'pubsub': self.require(len(results[0]['rows']) == 6, '订阅结果不正确')
+            mark('vector', bool(rows('vector')) and rows('vector')[0][0]=='1')
+            mark('vector_plan', 'ivf_search' in str(rows('vector_plan')))
+            mark('vector_plan_pre', 'ivf_search' in str(rows('vector_plan_pre')))
+            try:
+                health = m.vector_health('check')
+                self.validation_checks.append({'check':'ivf_health', 'title':'IVF 重建',
+                    'purpose':'1200 个向量，32 个真实中心', 'sql':health['sql'],
+                    'columns':['向量数','中心数'], 'rows':[[health['vectors'],health['centroids']]],
+                    'passed':health['vectors']==1200 and health['centroids']==32})
+            except m.DemoError as exc:
+                self.validation_checks.append({'check':'ivf_health', 'title':'IVF 重建',
+                    'purpose':'1200 个向量，32 个真实中心', 'sql':'-- 查询 IVF 中心分布',
+                    'columns':[], 'rows':[], 'error':str(exc), 'passed':False})
+        if self.feature == 'cdc':
+            for check in CHECKS[self.feature]: mark(check, rows(check) == [['1']])
+        if self.feature == 'pubsub': mark('subscriber', len(rows('subscriber')) == 6)
         if self.feature == 'ingest':
-            self.require(results[0]['rows']==[['7']] and len(results[1]['rows'])==1 and len(results[3]['rows'])==6 and results[4]['rows']==[['1000000']], 'ETL 行数验收失败')
-            self.require(results[2]['rows'][0][2:] == ['SUCCESS','6'], 'Task 未成功导入六行')
-        if self.feature == 'vector':
-            self.require(results[0]['rows'][0][0]=='1', '向量首位召回不是预期充电器')
-            self.require(all('ivf_search' in str(result['rows']) for result in results[2:4]), '没有命中 IVF 执行路径')
+            mark('external_rows', rows('external_rows') == [['7']])
+            mark('quality_rows', len(rows('quality_rows')) == 1)
+            mark('task_runs', bool(rows('task_runs')) and rows('task_runs')[0][2:] == ['SUCCESS','6'])
+            mark('products', len(rows('products')) == 6)
+            mark('order_count', rows('order_count') == [['1000000']])
         if self.feature == 'fulltext':
-            self.require(all(result['rows'][0][0]=='1' for result in results[:6]), '全文样本命中与预期不符')
-            self.require('fulltext_index_scan' in str(results[6]['rows']), '没有命中全文索引路径')
-        for result in results:
-            result['title'], result['purpose'] = PURPOSES[result['check']]
-        return {'checks': results, 'message': '本案例验收通过'}
+            for check in CHECKS[self.feature][:6]:
+                mark(check, bool(rows(check)) and rows(check)[0][0]=='1')
+            mark('fulltext_plan', 'fulltext_index_scan' in str(rows('fulltext_plan')))
+        if self.feature == 'iceberg':
+            mark('iceberg_current', rows('iceberg_current') == [['5','150']])
+            mark('iceberg_history', rows('iceberg_history') == [['4','100']])
+        failed = [result['title'] for result in self.validation_checks if not result['passed']]
+        if failed:
+            raise m.DemoError('验收未通过：' + '、'.join(failed))
+        return {'checks': self.validation_checks, 'message': '本案例验收通过'}
 
     def run(self, step):
         progress = self.read()
         expected = next((s for s in PLANS[self.feature] if s not in progress['completed']), None)
         if step != expected: raise self.core.DemoError(f'请先完成本案例步骤：{expected or "已完成，可重置重跑"}')
         self.trace = []
+        self.running_step = step
+        self.validation_checks = []
         try:
             result = None
             if step == 'start':
@@ -243,9 +324,14 @@ class Case:
             progress['verified'] = step == 'verify'
             progress['records'][step] = {'ok':True, 'trace':self.trace, 'result': self.public(result)}
         except Exception as exc:
-            progress['records'][step] = {'ok':False, 'trace':self.trace, 'error':str(exc)}
+            message = self.redact(exc)
+            progress['records'][step] = {'ok':False, 'trace':self.trace, 'error':message}
+            if step == 'verify':
+                progress['records'][step]['result'] = {'checks':self.validation_checks, 'message':message}
             self.write(progress)
-            raise self.core.DemoError(str(exc)) from exc
+            raise self.core.DemoError(message) from exc
+        finally:
+            self.running_step = None
         self.write(progress)
         return self.view()
 
