@@ -1,0 +1,5 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090e13"><title>MatrixOne · 能力图谱</title><link rel="stylesheet" href="./site.css"><link rel="stylesheet" href="./editorial.css"><link rel="stylesheet" href="./design.css"></head><body data-page="home"><div id="site-header"></div><main id="app"><section class="page-intro"><div class="eyebrow">LOCAL SERVICE REQUIRED</div><h1>先启动可执行文档</h1><p>浏览器不能直接连接 MatrixOne。请在教程仓库运行下面的本地服务，然后访问 <strong>http://127.0.0.1:8042/</strong>。页面中的 SQL 按钮会调用该服务执行真实查询。</p><div class="sql-card"><pre><code>./demo/setup.sh &amp;&amp; ./demo/start.sh</code></pre></div></section></main><div id="site-footer"></div><script>if(location.protocol!=='file:'){
+const app=document.getElementById('app');
+app.innerHTML='<section class="page-intro" aria-live="polite"><div class="eyebrow">MATRIXONE / v4.2.4</div><h1>正在加载文档…</h1></section>';
+import('./home.js').catch(()=>{app.textContent='文档加载失败，请刷新页面。若服务已关闭，在仓库运行 ./demo/start.sh 后重新打开。';});
+}</script></body></html>

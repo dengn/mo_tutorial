@@ -1,0 +1,5 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#090e13"><title>MatrixOne · 功能指南</title><link rel="stylesheet" href="./site.css"><link rel="stylesheet" href="./editorial.css"><link rel="stylesheet" href="./explorers.css"><link rel="stylesheet" href="./design.css"></head><body data-page="capability"><div id="site-header"></div><main id="app"><section class="page-intro"><div class="eyebrow">LOCAL SERVICE REQUIRED</div><h1>先启动可执行文档</h1><p>在教程仓库运行 <strong>./demo/setup.sh &amp;&amp; ./demo/start.sh</strong>，然后访问 <strong>http://127.0.0.1:8042/</strong>。这里的 SQL 会通过本地服务真正执行。</p></section></main><div id="site-footer"></div><script>if(location.protocol!=='file:'){
+const app=document.getElementById('app');
+app.innerHTML='<section class="page-intro" aria-live="polite"><div class="eyebrow">MATRIXONE / v4.2.4</div><h1>正在加载文档…</h1></section>';
+import('./capability.js').catch(()=>{app.textContent='文档加载失败，请刷新页面。若服务已关闭，在仓库运行 ./demo/start.sh 后重新打开。';});
+}</script></body></html>
