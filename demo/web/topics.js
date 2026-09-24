@@ -1,0 +1,186 @@
+// 重点功能的专题教程。场景中的真实操作与这些可展开的解释配合阅读。
+export const TOPICS = {
+  git4data: [
+    {
+      title:'共享基线与增量空间',
+      summary:'Clone 复用已有数据块，创建自己的元数据；候选库后续写入形成自己的增量状态。',
+      steps:['快照固定源库的一个可引用状态。','Clone 创建候选库引用，不逐行复制原有百万行。','在候选库修改商品价格后，两库的查询结果分开。','行数和 Clone 耗时是本机实测；不能把逻辑表大小相加或相减当作物理存储验证。'],
+      code:"SELECT COUNT(*) FROM demo_shop.orders;\nSELECT COUNT(*) FROM demo_shop_ci.orders;\nSELECT price FROM demo_shop.products WHERE product_id=1;\nSELECT price FROM demo_shop_ci.products WHERE product_id=1;",
+      verify:'下方真实 SQL 证明两库有相同基线和独立写入；共享存储机制由上方示意图解释，本演示未提供物理对象字节数测量。',
+    },
+    {
+      title:'百万行 Clone 如何用于 CI',
+      summary:'从正式库的确定快照建立候选库，在真实数据规模上执行会失败的测试。',
+      steps:['在正式库记录 COUNT 和关键业务指标，再创建快照。','Clone 出候选库，记录耗时并查询两边订单行数。','只在候选库注入负价，观察门禁失败；修复后再跑门禁。','确认正式库价格未变；上线时只应用验收通过的变更。'],
+      code:"CREATE SNAPSHOT demo_promo_base FOR DATABASE demo_shop;\nCREATE DATABASE demo_shop_ci CLONE demo_shop {snapshot='demo_promo_base'};\nSELECT COUNT(*) FROM demo_shop.orders;\nSELECT COUNT(*) FROM demo_shop_ci.orders;",
+      verify:'Clone 步骤执行时两边各为 100 万行。后续下单会让源库行数增长，候选库仍保持原基线；Clone 耗时取自本机执行。',
+    },
+    {
+      title:'Data Branch：逐行 DIFF 与 MERGE',
+      summary:'当变更需要按主键审查时，可在表级分支上修改、比较和合并。它是 Clone 工作流之外的另一个能力。',
+      steps:['从带主键的源表创建表分支。','在分支上修改少量行。','用 DATA BRANCH DIFF 审查哪些主键和列发生变化。','解决冲突并明确决定是否 MERGE；不要把候选库通过 CI 等同于自动合并。'],
+      code:'DATA BRANCH CREATE TABLE demo_shop_ci.products_trial\nFROM demo_shop_ci.products;\nUPDATE demo_shop_ci.products_trial SET price=269.10 WHERE product_id=1;\nDATA BRANCH DIFF demo_shop_ci.products_trial\nAGAINST demo_shop_ci.products;',
+      verify:'本页场景实际运行的是数据库 Clone 与 CI。表分支语句用于展示下一层能力，可参考官方 Git4Data Tutorial 做单独练习。',
+    },
+    {
+      title:'多团队使用与清理',
+      summary:'开发、QA 和数据科学可以从同一基线各自获取隔离数据；每个团队保留自己的验证结果。',
+      steps:['每个团队使用独立的目标库名。','将质量查询、回归 SQL 和执行结果保存在 CI 记录。','对照源库关键指标，证明隔离。','完成实验后删除临时 Clone；需要长期保留的基线使用明确命名的快照。'],
+      code:'SELECT COUNT(*) AS source_rows FROM demo_shop.orders;\nSELECT COUNT(*) AS qa_rows FROM demo_shop_ci.orders;\nSELECT product_id,price FROM demo_shop.products WHERE product_id=1;\nSELECT product_id,price FROM demo_shop_ci.products WHERE product_id=1;',
+      verify:'官方 Instant Clone 教程还比较不同团队副本的独立性与存储效率；本地案例核对行数、价格和本次耗时。',
+    },
+  ],
+  vector: [
+    {
+      title:'LISTS、nprobe 与过滤模式',
+      summary:'LISTS 在建索引时决定中心数；nprobe 在查询时决定探测范围；pre 和 post 决定过滤与取候选项的次序。',
+      steps:['对代表性数据建 IVF，保证 OP_TYPE 与 L2_DISTANCE 一致。','用 nprobe 控制本次查询扫描的中心数，比较 Top-K 命中。','用 EXPLAIN 确认 ivf_search，并对照 pre 过滤计划。','在目标数据上同时评估召回与延迟，不能只从示意点数推断性能。'],
+      code:"SELECT product_id,name FROM demo_shop_ci.products\nORDER BY L2_DISTANCE(embedding,'[0.95,0.08,0.02,0.00]')\nLIMIT 5 BY RANK WITH OPTION 'nprobe=2';\nEXPLAIN SELECT product_id,name FROM demo_shop_ci.products WHERE stock>0\nORDER BY L2_DISTANCE(embedding,'[0.95,0.08,0.02,0.00]')\nLIMIT 5 BY RANK WITH OPTION 'mode=pre';",
+      verify:'控制台可执行 nprobe 查询和两种 EXPLAIN。商品表只有 6 个向量，结果用于核对语法与执行路径。',
+    },
+    {
+      title:'IVF：从数据写入到健康维护',
+      summary:'训练时机、LISTS 参数、中心负载和重建都是向量索引的一部分。',
+      steps:['先写入足够有代表性的向量，确认维度和总数。','根据数据规模选择 LISTS，再建立 IVF 索引。','读取索引 entries，计算每个中心的数量、空中心数和负载比。','批量更新后复查；若查询延迟或分布不佳，重建并比较前后指标。'],
+      code:"SELECT COUNT(*) FROM demo_shop_ci.ivf_health_docs;\nCREATE INDEX idx_embedding_ivf USING IVFFLAT\nON demo_shop_ci.ivf_health_docs(embedding)\nLISTS=16 OP_TYPE 'vector_l2_ops';\nALTER TABLE demo_shop_ci.ivf_health_docs\nALTER REINDEX idx_embedding_ivf IVFFLAT LISTS=32;",
+      verify:'下方健康度实验真实生成 1200 个向量并展示每个中心的负载。LISTS 从 16 改为 32 后，负载比可能变好，也可能变差。',
+    },
+    {
+      title:'HNSW：另一种近邻索引',
+      summary:'HNSW 采用图结构。官方教程重点解释 BIGINT 主键、m、ef_construction、ef_search，以及查询质量与资源消耗的权衡。',
+      steps:['建表时使用 BIGINT 主键和定维向量列。','先准备样本数据，再建 HNSW 索引。','在相同查询向量和 Top-K 下比较索引与结果。','按本地版本行为测试写入与重建流程，再决定用于动态数据还是相对静态的数据。'],
+      code:"CREATE TABLE demo_shop_ci.hnsw_example (\n  id BIGINT PRIMARY KEY, embedding VECF32(4)\n);\n-- 先插入样本数据\nSET experimental_hnsw_index=1;\nCREATE INDEX idx_hnsw USING HNSW\nON demo_shop_ci.hnsw_example(embedding)\nOP_TYPE 'vector_l2_ops' M=16 EF_CONSTRUCTION=200 EF_SEARCH=50;",
+      verify:'这是独立索引路线的教学 SQL。当前一键场景执行 IVF，HNSW 的参数和限制可在官方教程及本地 release BVT 中查证。',
+    },
+    {
+      title:'混合检索：全文、向量与业务条件',
+      summary:'先用全文锁定显式词项，再用向量距离排序，同时排除无库存商品。',
+      steps:['先分别运行全文与向量查询，了解两种召回结果。','把 MATCH 条件、stock>0 和 L2_DISTANCE 放进同一条 SQL。','核对商品 ID、价格、库存与排序。','业务若需要宽召回，可改为分路检索后按商品 ID 融合。'],
+      code:"SELECT product_id,name,price,stock\nFROM demo_shop_ci.products\nWHERE MATCH(name,description) AGAINST('charger' IN NATURAL LANGUAGE MODE)\n  AND stock>0\nORDER BY L2_DISTANCE(embedding,'[0.95,0.08,0.02,0.00]')\nLIMIT 5;",
+      verify:'上方控制台可直接运行这条混合 SQL，结果来自同一张商品表。',
+    },
+    {
+      title:'应用接口：Pinecone 兼容与 RAG',
+      summary:'官方 Tutorial 展示 Python SDK 的 Pinecone 风格查询、元数据过滤与 RAG 检索链路。',
+      steps:['应用将文本交给嵌入模型生成向量；本演示预生成向量，专注数据库操作。','通过 SQL 或 Python SDK 写入向量与元数据。','查询相似记录并附带过滤条件。','RAG 应用把检索到的文档和来源交给生成步骤，并核对来源。'],
+      code:"SELECT product_id,name,price\nFROM demo_shop_ci.products\nWHERE category='travel' AND stock>0\nORDER BY L2_DISTANCE(embedding,'[0.95,0.08,0.02,0.00]')\nLIMIT 5;",
+      verify:'这里展示数据库侧的可运行 SQL；Pinecone SDK 和外部嵌入/生成服务是应用层扩展。',
+    },
+  ],
+  fulltext: [
+    {
+      title:'词项、评分与索引路径',
+      summary:'倒排索引从词项找到记录；自然语言检索返回 score，再由评分算法决定同一命中集的排序依据。',
+      steps:['建立商品文本索引后，先跑 MATCH 命中查询。','在同一会话里分别设为 TF-IDF 和 BM25，读取 score。','用 EXPLAIN 确认 fulltext_index_scan。','分数应在同一算法下用于排序，不跨算法比较绝对值；FULLTEXT2 的默认设置另行区分。'],
+      code:"SET ft_relevancy_algorithm='BM25';\nSELECT product_id, MATCH(name,description) AGAINST('charger' IN NATURAL LANGUAGE MODE) AS score\nFROM demo_shop_ci.products WHERE MATCH(name,description) AGAINST('charger' IN NATURAL LANGUAGE MODE)\nORDER BY score DESC;",
+      verify:'两项评分核对 SQL 真实执行本地 v4.2.4；EXPLAIN 的原始计划在同一控制台显示。',
+    },
+    {
+      title:'自然语言与布尔模式如何选择',
+      summary:'自然语言模式用于一般关键词；布尔模式用于明确的必须包含、排除和词组条件。',
+      steps:['在商品名称和描述上建全文索引。','运行自然语言查询，查看命中和相关度。','改用 IN BOOLEAN MODE 与 + 操作符，观察命中范围。','结合价格、类别或库存过滤，把文本结果带回业务场景。'],
+      code:"SELECT product_id,name,\n MATCH(name,description) AGAINST('charger' IN NATURAL LANGUAGE MODE) AS score\nFROM demo_shop_ci.products\nWHERE MATCH(name,description) AGAINST('charger' IN NATURAL LANGUAGE MODE);\nSELECT product_id,name FROM demo_shop_ci.products\nWHERE MATCH(name,description) AGAINST('+charger' IN BOOLEAN MODE);",
+      verify:'两种模式在本地候选库都能执行；布尔操作符的匹配行为需要根据实际词项逐条核对。',
+    },
+    {
+      title:'JSON 字段全文检索',
+      summary:'商品规格可保持 JSON 结构，同时由全文索引搜索其中的值。',
+      steps:['建 JSON 字段保存商品规格。','使用 WITH PARSER json 创建全文索引。','按 GaN 等技术词搜索 JSON 内容。','核对命中 product_id，再与商品表关联读取价格和库存。'],
+      code:"CREATE FULLTEXT INDEX ft_specs\nON demo_shop_ci.product_specs(details) WITH PARSER json;\nSELECT product_id FROM demo_shop_ci.product_specs\nWHERE MATCH(details) AGAINST('GaN') ORDER BY product_id;",
+      verify:'本地场景真实建 3 行 JSON 规格和全文索引，上方控制台可查询命中商品。',
+    },
+    {
+      title:'DATALINK 文档正文检索',
+      summary:'说明书仍留在 Stage，表中的 DATALINK 记录其位置，全文索引用于检索正文。',
+      steps:['将 DOCX 放入 Stage 管理的目录。','在 product_docs.manual 保存指向文件的 DATALINK。','给 DATALINK 字段建立全文索引。','查询 warranty，按 product_id 回到商品目录。'],
+      code:"CREATE TABLE demo_shop.product_docs (\n  doc_id BIGINT PRIMARY KEY, product_id BIGINT,\n  manual DATALINK, FULLTEXT(manual)\n);\nSELECT product_id FROM demo_shop_ci.product_docs\nWHERE MATCH(manual) AGAINST('warranty');",
+      verify:'这条查询访问候选库中的真实说明书，结果单元会返回命中 product_id。',
+    },
+  ],
+  ingest: [
+    {
+      title:'Stage 与外表：路径、映射和读取',
+      summary:'先给文件目录命名，再告诉 SQL 怎样把 products.csv 解析为七列。两个 DDL 只建立访问入口，真正的商品行仍在文件中。',
+      steps:['SHOW STAGES 确认 demo_supplier 指向本地 fixtures 目录。','supplier_feed 的 filepath 指向 stage://demo_supplier/products.csv。','SELECT 外表读到原始 7 行，包括负价的 #7。','INSERT ... SELECT 将 #7 的原因单独写入质量表；业务商品表还未导入。'],
+      code:"USE demo_ingest;\nCREATE STAGE demo_supplier URL='file://<本地材料目录>/';\nCREATE EXTERNAL TABLE supplier_feed (\n  product_id BIGINT,sku VARCHAR(40),name VARCHAR(120),\n  description TEXT,category VARCHAR(40),price DECIMAL(10,2),stock INT\n) INFILE{'filepath'='stage://demo_supplier/products.csv','format'='csv'}\nFIELDS TERMINATED BY ',' IGNORE 1 LINES;\nCREATE TABLE quality_issues(product_id BIGINT PRIMARY KEY,issue VARCHAR(80));\nSHOW STAGES;\nSELECT product_id,name,price,stock FROM supplier_feed ORDER BY product_id;\nINSERT INTO quality_issues\nSELECT product_id,'price or stock is invalid' FROM supplier_feed\nWHERE price<=0 OR stock<0;\nSELECT product_id,issue FROM quality_issues ORDER BY product_id;\nSELECT COUNT(*) FROM demo_shop.products;",
+      verify:'逐个位置核对：Stage URL、外表 7 行、质量表 1 行、Task 前商品表 0 行。',
+    },
+    {
+      title:'SQL Task：先定义，再触发，再查运行史',
+      summary:'demo_load_catalog 是 CREATE TASK 声明的任务名；任务体是把有效且尚未导入的商品插入 demo_shop.products。',
+      steps:['CREATE TASK demo_load_catalog 保存 INSERT ... SELECT 的完整任务体。','WHERE 过滤负价或负库存；NOT EXISTS 防止同一 product_id 重复导入。','EXECUTE TASK demo_load_catalog 按已定义的名字手动触发。','SHOW TASK RUNS 确认 SUCCESS、MANUAL 和 rows_affected；再 SELECT 商品表确认 6 行。'],
+      code:'USE demo_ingest;\nDELIMITER //\nCREATE TASK demo_load_catalog AS BEGIN\n  INSERT INTO demo_shop.products\n    (product_id,sku,name,description,category,price,stock)\n  SELECT f.product_id,f.sku,f.name,f.description,f.category,f.price,f.stock\n  FROM supplier_feed f\n  WHERE f.price>0 AND f.stock>=0\n    AND NOT EXISTS (SELECT 1 FROM demo_shop.products p\n                    WHERE p.product_id=f.product_id);\nEND//\nDELIMITER ;\nEXECUTE TASK demo_load_catalog;\nSHOW TASK RUNS FOR demo_load_catalog LIMIT 1;\nSELECT COUNT(*) AS products FROM demo_shop.products;',
+      verify:'运行史应显示成功及影响行数；商品数与质量表分别核对。百万行订单来自后续独立的 generate_series SQL。',
+    },
+  ],
+  htap: [
+    {
+      title:'交易：扣库存与写订单',
+      summary:'一次购买同时改变库存与订单，操作完成后可以按订单号重新读取。',
+      steps:['检查商品库存足够，并计算价格乘以数量。','生成本次订单号，在事务中更新库存和插入订单。','提交后按订单号和商品 ID 核对两张表。','实验台允许继续下单以观察连续变化。'],
+      code:'START TRANSACTION;\nUPDATE demo_shop.products SET stock=stock-1 WHERE product_id=1;\nINSERT INTO demo_shop.orders VALUES (<新订单号>,1,1,<成交金额>,CURRENT_TIMESTAMP());\nCOMMIT;',
+      verify:'下单接口返回真实订单号、金额与剩余库存；具体 SQL 保存在执行记录。',
+    },
+    {
+      title:'分析：提交后直接读经营指标',
+      summary:'在同一份业务数据上聚合订单数、销售额以及按商品分组的收入。',
+      steps:['记录下单前 COUNT 和 SUM。','提交一笔新订单。','再次执行同一聚合 SQL，核对订单数和金额增量。','按 product_id 分组可进一步形成商品运营视图。'],
+      code:'SELECT COUNT(*) AS orders,COALESCE(SUM(amount),0) AS revenue\nFROM demo_shop.orders;\nSELECT product_id,COUNT(*) AS orders,SUM(amount) AS revenue\nFROM demo_shop.orders GROUP BY product_id ORDER BY revenue DESC;',
+      verify:'场景页展示交易前后指标；控制台可重新执行汇总 SQL，结果会随着后续下单变化。',
+    },
+  ],
+  recovery: [
+    {title:'PITR：滚动窗口、对象范围与时间点',summary:'demo_price_history 是预先创建的保留策略；恢复指定 demo_pitr_shop 和窗口内的时间戳。',steps:['创建数据库级 PITR，配置一小时窗口。','提交正常数据，读取服务器时间 T₁。','批量误改之后记录 T₂，再 DROP 表。','选择 T₁ 找回正常价格；选择 T₂ 得到零价，说明恢复忠实于所选历史。'],code:"CREATE PITR demo_price_history FOR DATABASE demo_pitr_shop RANGE 1 'h';\nSHOW PITR WHERE pitr_name='demo_price_history';\nRESTORE DATABASE demo_pitr_shop FROM PITR demo_price_history '<服务器本地时间>';",verify:'PITR 实验返回六件商品的实际行，逐列与所选时间点的记录一致。'},
+
+    {
+      title:'事故前后：证明表真的丢了',
+      summary:'恢复演示必须包含已保存的基线、真实 DROP 和可观察的查询错误。',
+      steps:['把 orders 与 products 两项经营指标写入 promo_kpis。','逐项查询并创建数据库快照。','执行 DROP TABLE。','再查一次 promo_kpis，记录表不存在的错误。'],
+      code:'SELECT metric,metric_value FROM demo_shop.promo_kpis ORDER BY metric;\nCREATE SNAPSHOT demo_before_accident FOR DATABASE demo_shop;\nDROP TABLE demo_shop.promo_kpis;\nSELECT COUNT(*) FROM demo_shop.promo_kpis;',
+      verify:'执行记录中保留删除命令和查询失败；这一步的错误是事故证据。',
+    },
+    {
+      title:'恢复后：逐项校验业务值',
+      summary:'RESTORE 成功提示之后，还要证明表内容与事故前一致。',
+      steps:['用事故前快照恢复目标表。','重新读取 metric 与 metric_value。','按名称比较每项值，而非仅比较行数。','保留恢复前、删除后、恢复后的证据记录。'],
+      code:'RESTORE TABLE demo_shop.promo_kpis{snapshot="demo_before_accident"};\nSELECT metric,metric_value FROM demo_shop.promo_kpis ORDER BY metric;',
+      verify:'场景页显示两项指标恢复，核对控制台可重新查询当前表。',
+    },
+  ],
+  pubsub: [
+    {
+      title:'发布方：控制共享的表与账号',
+      summary:'将商品目录发布给合作伙伴，保持订单和内部质量数据不在发布范围内。',
+      steps:['创建独立的合作伙伴账号。','创建 Publication，并指定 DATABASE、TABLE 和 ACCOUNT。','检查发布范围与授权对象。'],
+      code:"CREATE ACCOUNT demo_partner ADMIN_NAME 'admin' IDENTIFIED BY '<演示密码>';\nCREATE PUBLICATION demo_catalog\nDATABASE demo_shop TABLE products ACCOUNT demo_partner;",
+      verify:'实际案例由本地服务创建账号和发布，页面不会展示真实连接密码。',
+    },
+    {
+      title:'订阅方：在独立账号下读数据',
+      summary:'订阅账号创建自己的数据库入口，再直接查询发布的商品。',
+      steps:['以 demo_partner:admin 登录 MatrixOne。','创建 partner_catalog 订阅入口。','执行商品明细查询，核对商品数与发布方对应。'],
+      code:'CREATE DATABASE partner_catalog FROM sys PUBLICATION demo_catalog;\nSELECT product_id,name,price FROM partner_catalog.products\nORDER BY product_id LIMIT 6;',
+      verify:'订阅控制台的查询由合作伙伴账号执行，结果区标明数据源。',
+    },
+  ],
+  iceberg: [
+    {title:'从一堆文件到一张表',summary:'数据文件保存记录；Iceberg 元数据说明 schema、快照和文件集合；Catalog 提供按名字加载表的入口。',steps:['用 REST API 建 namespace 与湖表。','查看返回的 metadata-location 和列 ID。','在 MatrixOne 注册 Catalog 与访问范围。','建外表映射，检查 SHOW CREATE TABLE 的 namespace/table/ref。'],code:'SHOW CREATE TABLE demo_story_lake.append_orders;',verify:'映射参数能对应湖上的实际表名，存储中有真实元数据文件。'},
+    {title:'一次追加为何能保留两个状态',summary:'先写四行，在 Catalog 上保留历史分支，然后只向 main 追加第五行。',steps:['首次 INSERT 提交四行快照。','记录 snapshot ID，从 main 当前提交创建 Nessie 分支。','第二个本地外表映射到该分支。','向 main 追加 #5，再对照两侧订单与金额。'],code:'SELECT COUNT(*),SUM(amount) FROM demo_story_lake.append_orders;\nSELECT COUNT(*),SUM(amount) FROM demo_story_lake.append_orders_old;',verify:'四行与五行各自对应明确的 Catalog ref；历史查询还可以指定其真实 snapshot ID。'},
+  ],
+  cdc: [
+    {
+      title:'准备：变更保留窗口和目标库',
+      summary:'CDC 任务启动前，明确源表、目标表、连接账号和变更保留范围。',
+      steps:['在源端为 demo_shop 准备 PITR 窗口。','启动独立 MySQL，并创建 demo_sink。','建立订单表映射的 CDC 任务。','等待初始检查点，再产生新订单。'],
+      code:"CREATE PITR demo_cdc_pitr FOR DATABASE demo_shop RANGE 3 'h';\nCREATE CDC demo_orders_cdc '<源端 URI>' 'mysql' '<目标端 URI>'\n'demo_shop.orders:demo_sink.orders'\n{'Level'='table','NoFull'='true'};\nSHOW CDC ALL;",
+      verify:'场景页检查任务已创建并等到检查点；连接 URI 由本地服务提供，不在网页中回显口令。',
+    },
+    {
+      title:'核对：同一订单在两端可见',
+      summary:'按订单号验证源端写入和目标端交付，明确哪个查询连接了哪个数据库。',
+      steps:['CDC 初始检查点到达后，在 MatrixOne 写新订单。','记录订单号并轮询 MySQL 目标端。','两端按同一订单号查询，均应命中 1 行。','若未到达，进一步检查任务状态和水位。'],
+      code:'SELECT COUNT(*) FROM demo_shop.orders WHERE order_id=<新订单号>;\n-- 以下查询在独立 MySQL 目标端执行\nSELECT COUNT(*) FROM demo_sink.orders WHERE order_id=<新订单号>;',
+      verify:'两个控制台单元分别执行 MatrixOne 和 MySQL 查询，结果区标注连接来源。',
+    },
+  ],
+};
