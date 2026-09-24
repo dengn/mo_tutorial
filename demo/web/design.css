@@ -72,3 +72,11 @@ main{max-width:var(--max);padding-left:clamp(22px,3.2vw,52px);padding-right:clam
 
 /* Result insertion must not make the browser anchor to the moving footer. */
 .case-workbench{overflow-anchor:none}
+
+/* SQL calls and business acceptance have separate visual roles. */
+.sql-timeline{margin:24px 0;min-width:0}.timeline-heading{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;margin-bottom:24px}.timeline-heading span{font-size:11px;color:#94abba}
+.timeline-entry{position:relative;display:grid;grid-template-columns:24px minmax(0,1fr);gap:16px;padding-bottom:28px}.timeline-entry:not(:last-child):before{content:'';position:absolute;left:11px;top:25px;bottom:0;width:1px;background:#344c59}.timeline-node{position:relative;display:grid;place-items:center;width:24px;height:24px;border:1px solid #56cbb0;border-radius:50%;color:#79dfc4;background:#122a28;font-size:12px}.timeline-content{min-width:0}.timeline-content header{display:flex;gap:10px;flex-wrap:wrap;justify-content:space-between;font-size:12px;min-height:28px}.timeline-content header span{color:#96adbe;font:11px ui-monospace,monospace}.timeline-entry .sql-card{margin:12px 0 0}.timeline-response{padding:14px 16px;background:#0d1722;border:1px solid #344153;border-top:0;border-radius:0 0 6px 6px}.timeline-response small{color:#93b6ae;font-size:11px}.timeline-response pre{color:#c4d5df;margin:10px 0 0;max-height:260px}.timeline-entry.error .timeline-node{color:#edb19e;border-color:#bd7167;background:#382326}.timeline-entry.error .timeline-response{border-color:#88504b}.timeline-entry.running .timeline-node{animation:timeline-pulse 1.4s ease-in-out infinite}.case-validation{border-top:2px solid #ad96d4;padding-top:20px;margin-top:30px}.case-validation>p{color:#aebdca;font-size:12px;line-height:1.8}
+@keyframes timeline-pulse{50%{box-shadow:0 0 0 6px #56cbb01c}}
+@media(max-width:680px){.timeline-entry{gap:10px}.timeline-content header{flex-direction:column}.timeline-response{padding:12px}}
+@media(prefers-reduced-motion:reduce){.timeline-entry.running .timeline-node{animation:none}}
+.case-validation.failed{border-color:#bd7167}.case-validation details.failed summary{color:#eeb5a8}.case-validation details.passed summary{color:#80dcc3}.case-validation .sql-card{margin:12px 0}.case-validation .table-wrap{margin:14px 0}
